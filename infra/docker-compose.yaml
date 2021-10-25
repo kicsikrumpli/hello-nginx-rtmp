@@ -1,0 +1,88 @@
+version: '3.9'
+
+# https://github.com/confluentinc/cp-all-in-one/blob/6.2.1-post/cp-all-in-one/docker-compose.yml
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper
+    hostname: zookeeper
+    networks:
+      - sandbox
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka
+    hostname: kafka
+    networks:
+      - sandbox
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9101:9101"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      # https://rmoff.net/2018/08/02/kafka-listeners-explained/
+      # https://gist.github.com/rmoff/fb7c39cc189fc6082a5fbd390ec92b3d
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CONFLUENT_SCHEMA_REGISTRY_URL: http://registry:8081
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry
+    hostname: registry
+    depends_on:
+      - kafka
+    ports:
+      - "8081:8081"
+    networks:
+      - sandbox
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: 'kafka:29092'
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+
+  kafka-connect:
+    image: confluentinc/cp-kafka-connect
+    hostname: connect
+    depends_on:
+      - kafka
+      - schema-registry
+    # ports
+    networks:
+      - sandbox
+    environment:
+      # https://docs.confluent.io/platform/current/installation/docker/config-reference.html#kconnect-long-configuration
+      # required
+      CONNECT_BOOTSTRAP_SERVERS: "kafka:29092"
+      CONNECT_GROUP_ID: "sandbox"
+      CONNECT_CONFIG_STORAGE_TOPIC: "sandbox-config"
+      CONNECT_OFFSET_STORAGE_TOPIC: "sandbox-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "sandbox-status"
+      CONNECT_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      # CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      # CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      # CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: 'http://registry:8081'
+      CONNECT_INTERNAL_KEY_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_INTERNAL_VALUE_CONVERTER: "org.apache.kafka.connect.json.JsonConverter"
+      CONNECT_REST_ADVERTISED_HOST_NAME: "connect"
+      CONNECT_REST_PORT: 8083
+      CONNECT_PLUGIN_PATH: /usr/share/java
+      # https://github.com/confluentinc/demo-scene/blob/master/kafka-connect-zero-to-hero/docker-compose.yml#L82-L87
+      # CONNECT_LOG4J_APPENDER_STDOUT_LAYOUT_CONVERSIONPATTERN: "[%d] %p %X{connector.context}%m (%c:%L)%n"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: "1"
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: "1"
+
+
+networks:
+  sandbox:
+    name: 'sandbox network'
