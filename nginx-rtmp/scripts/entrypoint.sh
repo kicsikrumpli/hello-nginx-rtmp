@@ -7,12 +7,7 @@
 echo "go to http://localhost:8080/hls/stream.m3u8 to play stream"
 echo "------------\n"
 
-if [ -z "$1" ]
-then
-      source="https://www.rmp-streaming.com/media/big-buck-bunny-360p.mp4"
-else
-      source="$1"
-fi
+source="$1"
 
 # NB!
 # -re -f mjpeg -i $source for MJPG (NOT mpjpeg)
@@ -31,5 +26,5 @@ ffmpeg -re -i $source \
 
 echo "----- done -----"
 
-# sleep infinity
+sleep infinity
 
