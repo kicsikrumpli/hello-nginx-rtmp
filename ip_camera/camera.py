@@ -1,5 +1,6 @@
 import threading
 import time
+from contextlib import contextmanager
 from functools import partial
 from typing import Optional
 
@@ -12,15 +13,16 @@ from ip_camera.camera_exception import CameraDisconnectedException
 
 
 class Camera:
-    def __init__(self, source: str):
+    def __init__(self,
+                 source: str,
+                 timeout_s=5):
         self.source = source
         self.video_capture: Optional[VideoCapture] = None
-        self.is_capturing = threading.Event()
         self.capture_thread: Optional[threading.Thread] = None
         self.buffer: Optional[np.ndarray] = None
-        self.fps_meter = FPS()
         self.lock = threading.Lock()
-        self.frame_ready = threading.Event()
+        self.timeout_s = timeout_s
+        self.started = threading.Event()
 
     def __enter__(self):
         self.connect()
@@ -28,29 +30,39 @@ class Camera:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        self.disconnect()
+
         if exc_type:
             print(exc_type, exc_val)
-        self.disconnect()
+            return False
+
         return True
 
     def connect(self):
+        self.started.clear()
         self.video_capture = VideoCapture(self.source)
         if self.video_capture is None:
             raise CameraDisconnectedException()
         if not self.video_capture.isOpened():
             raise CameraDisconnectedException()
+        self.video_capture.set(cv2.CAP_PROP_BUFFERSIZE, 10)
 
-    def get_fps(self):
-        return self.video_capture.get(cv2.CAP_PROP_FPS)
+    @property
+    def fps(self):
+        try:
+            current_frame = self.video_capture.get(cv2.CAP_PROP_POS_FRAMES)
+            current_time = self.video_capture.get(cv2.CAP_PROP_POS_MSEC)
+            return current_frame / (current_time / 1000)
+        except Exception:
+            # this is unreliable
+            return self.video_capture.get(cv2.CAP_PROP_FPS)
 
     def start_capture(self):
-        fps = self.get_fps()
-        self.capture_thread = threading.Thread(target=partial(self._capture_thread, fps))
+        self.capture_thread = threading.Thread(target=self._capture_thread, daemon=True)
         self.capture_thread.start()
-        self.fps_meter.start()
 
-    def _capture_thread(self, fps):
-        # self.is_capturing.set()
+    def _capture_thread(self):
+        print(f'starting capture thread.')
         while True:
             grabbed = self.video_capture.grab()
             if grabbed:
@@ -58,24 +70,36 @@ class Camera:
                 with self.lock:
                     _, buffer = self.video_capture.retrieve()
                     self.buffer = buffer.copy()
-                self.frame_ready.set()
-                self.fps_meter.update()
-                time.sleep(1 / fps)
+                self.started.set()
+                # print(self.fps)
+                time.sleep(1 / self.fps)
             else:
-                self.is_capturing.clear()
-                self.frame_ready.set()
-                self.fps_meter.stop()
+                print('stopping capture thread')
                 break
 
     def sample(self) -> np.ndarray:
-        if self.is_capturing.isSet():
-            self.frame_ready.wait()
-            with self.lock:
-                self.frame_ready.clear()
-                return self.buffer
-        else:
+        if not self.is_capturing():
             raise CameraDisconnectedException()
+        try:
+            self.started.wait(self.timeout_s)
+            with self.lock_with_timeout(self.lock, self.timeout_s):
+                return self.buffer
+        except TimeoutError:
+            print('capture timeout')
+            raise CameraDisconnectedException()
+
+    @staticmethod
+    @contextmanager
+    def lock_with_timeout(lock, timeout=5):
+        locked = lock.acquire(blocking=True, timeout=timeout)
+        if not locked:
+            raise TimeoutError
+        yield locked
+        lock.release()
 
     def disconnect(self):
         if self.video_capture:
             self.video_capture.release()
+
+    def is_capturing(self):
+        return self.capture_thread.is_alive()
